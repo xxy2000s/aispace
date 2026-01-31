@@ -1,6 +1,88 @@
 # 内网文件传输服务
 
 一个轻量级的局域网文件传输工具，支持手机和电脑间的快速文件互传。
+# file-transfer 服务管理工具
+
+## 简介
+这是一个功能完整的文件传输服务管理工具，可以作为独立可执行文件在任意终端使用。
+
+## 主要特性
+- ✅ 服务健康检测（进程+HTTP双重检查）
+- ✅ 智能端口管理（自动寻找可用端口）
+- ✅ 配置持久化（保存启动参数）
+- ✅ 依赖自动检查和安装
+- ✅ 优雅关闭机制
+- ✅ 日志轮转和分离管理
+- ✅ 自动监控和重启
+- ✅ 彩色状态输出
+
+## 使用方法
+
+### 基本命令
+```bash
+# 启动服务（默认端口8080）
+./file-transfer start
+
+# 指定端口启动
+./file-transfer start 9090
+
+# 完整参数启动
+./file-transfer start 8080 0.0.0.0 true
+
+# 停止服务
+./file-transfer stop
+
+# 重启服务
+./file-transfer restart
+
+# 查看服务状态
+./file-transfer status
+```
+
+### 日志管理
+```bash
+# 查看实时日志
+./file-transfer logs
+
+# 只看错误日志
+./file-transfer logs error
+
+# 查看最后20行日志
+./file-transfer tail
+
+# 查看最后50行错误日志
+./file-transfer tail 50 error
+```
+
+### 服务监控
+```bash
+# 启动自动监控（异常时自动重启）
+./file-transfer monitor
+```
+
+### 环境变量方式
+```bash
+PORT=8081 ./file-transfer start
+HOST=0.0.0.0 DEBUG=true ./file-transfer start
+```
+
+## 文件说明
+- `file-transfer` - 主要的可执行管理工具
+- `app.py` - 文件传输服务主程序
+- `README-TOOL.md` - 本使用说明
+- `README.md` - 服务功能说明
+
+## 系统要求
+- Linux/macOS 系统
+- Bash shell
+- Python 3
+- pip3
+
+## 注意事项
+- 服务默认运行在 8080 端口
+- 日志文件位于 `/tmp/` 目录
+- 仅适用于局域网可信环境
+- 需要适当的文件系统权限
 
 ## 🚀 快速开始
 

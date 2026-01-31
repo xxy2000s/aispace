@@ -1,200 +1,595 @@
 #!/bin/bash
-# 全局文件传输服务启动脚本
+# file-transfer - 文件传输服务管理工具
+# 一个功能完整的服务管理脚本，支持启动、停止、监控文件传输服务
 
-# 函数定义
-show_help() {
-    echo "文件传输服务 - 全局启动脚本"
-    echo ""
-    echo "用法: file-transfer [选项] [项目路径]"
-    echo ""
-    echo "选项:"
-    echo "  -p, --port PORT    指定服务端口 (默认: 8080)"
-    echo "  --host HOST        指定监听地址 (默认: 0.0.0.0)"
-    echo "  -d, --daemon       后台运行模式"
-    echo "  -s, --stop         停止后台运行的服务"
-    echo "  -k, --kill         强制停止所有相关进程"
-    echo "  -h, --help         显示帮助信息"
-    echo ""
-    echo "环境变量:"
-    echo "  FILE_TRANSFER_PATH    指定项目路径"
-    echo "  FILE_TRANSFER_LOG     指定日志文件 (默认: /tmp/file_transfer.log)"
-    echo ""
-    echo "示例:"
-    echo "  file-transfer                           # 前台运行"
-    echo "  file-transfer --port 9090              # 指定端口"
-    echo "  file-transfer --daemon                 # 后台运行"
-    echo "  file-transfer --daemon --port 9090     # 后台运行指定端口"
-    echo "  file-transfer --stop                   # 停止后台服务"
-    echo "  file-transfer /path/to/project         # 指定项目路径"
-    echo "  FILE_TRANSFER_PATH=/path/to/project file-transfer  # 使用环境变量"
+set -e
+
+# 设置项目目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# 基础配置
+SERVICE_NAME="file-transfer-service"
+SERVICE_DISPLAY_NAME="文件传输服务"
+PID_FILE="/tmp/file-transfer/file-transfer.pid"
+LOG_FILE="/tmp/file-transfer/file-transfer.log"
+ERROR_LOG_FILE="/tmp/file-transfer/file-transfer-error.log"
+CONFIG_FILE="/tmp/file-transfer/file-transfer-config.json"
+HEALTH_CHECK_TIMEOUT=5
+MAX_RESTART_ATTEMPTS=3
+LOG_MAX_SIZE=10485760
+
+# 默认配置
+DEFAULT_PORT=9988
+DEFAULT_HOST="0.0.0.0"
+DEFAULT_DEBUG=false
+
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;94m'
+NC='\033[0m'
+
+# 日志函数
+log_info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
 }
 
-# 默认值
-PORT=8080
-HOST="0.0.0.0"
-DAEMON_MODE=false
-STOP_SERVICE=false
-FORCE_KILL=false
-PROJECT_DIR=""
+log_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
 
-# 检查PID文件位置
-PID_FILE="/tmp/file_transfer.pid"
-LOG_FILE="${FILE_TRANSFER_LOG:-/tmp/file_transfer.log}"
+log_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
 
-# 解析命令行参数
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -p|--port)
-            PORT="$2"
-            shift 2
-            ;;
-        --host)
-            HOST="$2"
-            shift 2
-            ;;
-        -d|--daemon)
-            DAEMON_MODE=true
-            shift
-            ;;
-        -s|--stop)
-            STOP_SERVICE=true
-            shift
-            ;;
-        -k|--kill)
-            FORCE_KILL=true
-            shift
-            ;;
-        -h|--help)
-            show_help
-            exit 0
-            ;;
-        -*)
-            echo "未知参数: $1"
-            echo "使用 file-transfer --help 查看帮助"
-            exit 1
-            ;;
-        *)
-            PROJECT_DIR="$1"
-            shift
-            ;;
-    esac
-done
-
-# 检查是否需要停止服务
-if [ "$STOP_SERVICE" = true ]; then
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null 2>&1; then
-            echo "🛑 停止服务 (PID: $PID)..."
-            kill "$PID" 2>/dev/null
-            sleep 1
-            if ps -p "$PID" > /dev/null 2>&1; then
-                echo "⚠️  强制停止服务..."
-                kill -9 "$PID" 2>/dev/null
-            fi
-            rm -f "$PID_FILE"
-            echo "✅ 服务已停止"
-        else
-            echo "❌ 服务进程不存在"
-            rm -f "$PID_FILE"
-        fi
-    else
-        echo "❌ 服务未运行"
-    fi
-    exit 0
-fi
-
-if [ "$FORCE_KILL" = true ]; then
-    echo "💥 强制停止所有文件传输服务进程..."
-    pkill -f "python.*app\.py" 2>/dev/null
-    rm -f "$PID_FILE"
-    echo "✅ 所有相关进程已停止"
-    exit 0
-fi
-
-# 查找项目目录
-if [ -z "$PROJECT_DIR" ]; then
-    if [ -n "$FILE_TRANSFER_PATH" ]; then
-        PROJECT_DIR="$FILE_TRANSFER_PATH"
-    else
-        # 自动查找项目目录
-        POSSIBLE_PATHS=(
-            "$HOME/Projects/file_transfer_service"
-            "$HOME/Desktop/file_transfer_service"
-            "$HOME/file_transfer_service"
-            "/opt/file_transfer_service"
-            "/usr/local/file_transfer_service"
-            "$(pwd)/file_transfer_service"
-            "."
-        )
-
-        for path in "${POSSIBLE_PATHS[@]}"; do
-            if [ -n "$path" ] && [ -d "$path" ] && [ -f "$path/app.py" ]; then
-                PROJECT_DIR="$path"
-                break
-            fi
-        done
-    fi
-fi
-
-if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app.py" ]; then
-    echo "❌ 未找到文件传输服务项目"
-    echo ""
-    echo "💡 解决方案:"
-    echo "   1. 将项目放在常见目录如 ~/Projects/file_transfer_service"
-    echo "   2. 或设置环境变量 FILE_TRANSFER_PATH=/path/to/your/project"
-    echo "   3. 或直接指定项目路径: file-transfer /path/to/project"
-    echo ""
-    exit 1
-fi
-
-# 检查PID文件，如果服务已在运行
-if [ -f "$PID_FILE" ]; then
-    PID=$(cat "$PID_FILE")
-    if ps -p "$PID" > /dev/null 2>&1; then
-        echo "❌ 服务已在运行 (PID: $PID)"
-        echo "💡 使用 'file-transfer --stop' 停止当前服务，或指定其他端口"
-        exit 1
-    else
-        # 清理无效的PID文件
-        rm -f "$PID_FILE"
-    fi
-fi
-
-# 切换到项目目录
-cd "$PROJECT_DIR" || exit 1
+log_error() {
+    echo -e "${RED}❌ $1${NC}" >&2
+}
 
 # 检查依赖
-if ! python -c "import flask" >/dev/null 2>&1; then
-    echo "📦 安装依赖..."
-    pip install -r requirements.txt >/dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        echo "❌ 依赖安装失败"
-        exit 1
+check_dependencies() {
+    log_info "检查系统依赖..."
+    
+    if ! command -v python3 &> /dev/null; then
+        log_error "Python3 未安装"
+        return 1
     fi
-fi
+    
+    if ! command -v pip3 &> /dev/null; then
+        log_error "pip3 未安装"
+        return 1
+    fi
+    
+    if ! python3 -c "import flask" &> /dev/null; then
+        log_warning "Flask 未安装，正在安装..."
+        # 尝试多种安装方式
+        if pip3 install flask --user 2>/dev/null; then
+            log_success "Flask 安装成功"
+        elif python3 -m pip install flask --user 2>/dev/null; then
+            log_success "Flask 安装成功"
+        else
+            log_warning "Flask 安装失败，尝试使用现有环境..."
+        fi
+    fi
+    
+    log_success "依赖检查通过"
+    return 0
+}
+
+# 创建必要的目录
+create_directories() {
+    mkdir -p "$(dirname "$PID_FILE")"
+    mkdir -p "$(dirname "$LOG_FILE")"
+    mkdir -p "$(dirname "$ERROR_LOG_FILE")"
+    mkdir -p "uploads"
+    mkdir -p "temp"
+}
+
+# 保存服务配置
+save_service_config() {
+    local port=$1
+    local host=$2
+    local debug=$3
+    
+    cat > "$CONFIG_FILE" << EOF
+{
+    "port": $port,
+    "host": "$host",
+    "debug": $debug,
+    "start_time": "$(date -Iseconds)",
+    "pid_file": "$PID_FILE",
+    "log_file": "$LOG_FILE"
+}
+EOF
+}
+
+# 加载服务配置
+load_service_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        if command -v jq &> /dev/null; then
+            CONFIG_PORT=$(jq -r '.port' "$CONFIG_FILE" 2>/dev/null || echo "$DEFAULT_PORT")
+            CONFIG_HOST=$(jq -r '.host' "$CONFIG_FILE" 2>/dev/null || echo "$DEFAULT_HOST")
+            CONFIG_DEBUG=$(jq -r '.debug' "$CONFIG_FILE" 2>/dev/null || echo "$DEFAULT_DEBUG")
+        else
+            CONFIG_PORT=$(grep -o '"port":[[:space:]]*[0-9]*' "$CONFIG_FILE" | cut -d':' -f2 | tr -d ' ' | head -1 || echo "$DEFAULT_PORT")
+            CONFIG_HOST=$(grep -o '"host":"[^"]*"' "$CONFIG_FILE" | cut -d'"' -f4 | head -1 || echo "$DEFAULT_HOST")
+            CONFIG_DEBUG=$(grep -o '"debug":[[:space:]]*true\|false' "$CONFIG_FILE" | cut -d':' -f2 | tr -d ' ' | head -1 || echo "$DEFAULT_DEBUG")
+        fi
+    else
+        CONFIG_PORT=$DEFAULT_PORT
+        CONFIG_HOST=$DEFAULT_HOST
+        CONFIG_DEBUG=$DEFAULT_DEBUG
+    fi
+}
+
+# 检查端口是否可用
+check_port_available() {
+    local port=$1
+    if lsof -i :$port &> /dev/null; then
+        return 1
+    else
+        return 0
+    fi
+}
+
+# 寻找可用端口
+find_free_port() {
+    local start_port=${1:-$DEFAULT_PORT}
+    local max_attempts=100
+    
+    for ((port=start_port; port<start_port+max_attempts; port++)); do
+        if check_port_available $port; then
+            echo $port
+            return 0
+        fi
+    done
+    
+    log_error "无法找到可用端口 (尝试范围: $start_port-$((start_port+max_attempts-1)))"
+    return 1
+}
+
+# 健康检查
+health_check() {
+    local port=$1
+    local host=${2:-"localhost"}
+    
+    if [ ! -f "$PID_FILE" ]; then
+        return 1
+    fi
+    
+    local pid=$(cat "$PID_FILE")
+    if ! ps -p "$pid" > /dev/null 2>&1; then
+        return 1
+    fi
+    
+    if command -v curl &> /dev/null; then
+        if curl -s --max-time $HEALTH_CHECK_TIMEOUT "http://$host:$port/" > /dev/null 2>&1; then
+            return 0
+        fi
+    elif command -v wget &> /dev/null; then
+        if wget -q --timeout=$HEALTH_CHECK_TIMEOUT -O /dev/null "http://$host:$port/" 2>&1; then
+            return 0
+        fi
+    else
+        if check_port_available $port; then
+            return 1
+        else
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
+# 日志轮转
+rotate_logs() {
+    if [ -f "$LOG_FILE" ] && [ $(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null) -gt $LOG_MAX_SIZE ]; then
+        log_info "执行日志轮转..."
+        mv "$LOG_FILE" "${LOG_FILE}.old"
+        touch "$LOG_FILE"
+        log_success "日志轮转完成"
+    fi
+    
+    if [ -f "$ERROR_LOG_FILE" ] && [ $(stat -f%z "$ERROR_LOG_FILE" 2>/dev/null || stat -c%s "$ERROR_LOG_FILE" 2>/dev/null) -gt $LOG_MAX_SIZE ]; then
+        mv "$ERROR_LOG_FILE" "${ERROR_LOG_FILE}.old"
+        touch "$ERROR_LOG_FILE"
+    fi
+}
 
 # 启动服务
-if [ "$DAEMON_MODE" = true ]; then
-    echo "🚀 后台启动文件传输服务 (端口: $PORT)..."
-    nohup python app.py --port "$PORT" --host "$HOST" > "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
+start_service() {
+    local port=${1:-$DEFAULT_PORT}
+    local host=${2:-$DEFAULT_HOST}
+    local debug=${3:-$DEFAULT_DEBUG}
     
-    sleep 2
-    if [ -f "$PID_FILE" ] && ps -p $(cat "$PID_FILE") > /dev/null 2>&1; then
-        echo "✅ 服务后台运行成功 (PID: $(cat "$PID_FILE"), 端口: $PORT)"
-        echo "🌐 访问地址: http://localhost:$PORT"
-        echo "📝 日志文件: $LOG_FILE"
-        echo "💡 使用 'file-transfer --stop' 停止服务"
-    else
-        echo "❌ 服务启动失败"
-        rm -f "$PID_FILE"
-        exit 1
+    log_info "启动 $SERVICE_DISPLAY_NAME..."
+    
+    if ! check_dependencies; then
+        log_error "依赖检查失败，无法启动服务"
+        return 1
     fi
-else
-    echo "🚀 启动文件传输服务 (端口: $PORT)..."
-    echo "🌐 访问地址: http://localhost:$PORT"
-    echo "💡 按 Ctrl+C 停止服务"
+    
+    create_directories
+    
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            if health_check $port $host; then
+                log_warning "$SERVICE_DISPLAY_NAME 已在运行 (PID: $pid, 端口: $port)"
+                show_service_info $port $host
+                return 1
+            else
+                log_warning "PID文件存在但服务无响应，清理中..."
+                rm -f "$PID_FILE"
+            fi
+        else
+            log_info "清理过期的PID文件..."
+            rm -f "$PID_FILE"
+        fi
+    fi
+    
+    if ! check_port_available $port; then
+        log_warning "端口 $port 已被占用，寻找可用端口..."
+        local new_port=$(find_free_port $port)
+        if [ $? -ne 0 ]; then
+            return 1
+        fi
+        port=$new_port
+        log_info "使用端口: $port"
+    fi
+    
+    save_service_config $port $host $debug
+    rotate_logs
+    
+    log_info "启动服务进程 (端口: $port, 主机: $host)..."
+    
+    local start_cmd="python3 app.py --port $port --host $host"
+    if [ "$debug" = true ]; then
+        start_cmd="$start_cmd --debug"
+    fi
+    
+    if command -v nohup &> /dev/null; then
+        nohup $start_cmd > "$LOG_FILE" 2> "$ERROR_LOG_FILE" &
+    else
+        $start_cmd > "$LOG_FILE" 2> "$ERROR_LOG_FILE" &
+    fi
+    
+    local pid=$!
+    echo $pid > "$PID_FILE"
+    
+    log_info "等待服务启动..."
+    local wait_count=0
+    local max_wait=30
+    
+    while [ $wait_count -lt $max_wait ]; do
+        if health_check $port $host; then
+            log_success "$SERVICE_DISPLAY_NAME 启动成功"
+            show_service_info $port $host
+            return 0
+        fi
+        sleep 1
+        ((wait_count++))
+    done
+    
+    log_error "服务启动超时"
+    if [ -f "$ERROR_LOG_FILE" ]; then
+        log_error "错误日志:"
+        tail -10 "$ERROR_LOG_FILE"
+    fi
+    rm -f "$PID_FILE"
+    return 1
+}
+
+# 显示服务信息
+show_service_info() {
+    local port=$1
+    local host=$2
+    
     echo ""
-    python app.py --port "$PORT" --host "$HOST"
+    log_success "$SERVICE_DISPLAY_NAME 运行信息:"
+    echo "  PID: $(cat "$PID_FILE")"
+    echo "  端口: $port"
+    echo "  主机: $host"
+    echo "  访问地址: http://localhost:$port"
+    
+    if command -v ip &> /dev/null; then
+        local ip_addr=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' | head -1)
+    elif command -v ifconfig &> /dev/null; then
+        local ip_addr=$(ifconfig | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1' | head -1)
+    else
+        local ip_addr="localhost"
+    fi
+    
+    if [ -n "$ip_addr" ] && [ "$ip_addr" != "localhost" ]; then
+        echo "  网络访问: http://$ip_addr:$port"
+    fi
+    
+    echo "  日志文件: $LOG_FILE"
+    echo "  错误日志: $ERROR_LOG_FILE"
+    echo "  PID文件: $PID_FILE"
+    echo "  配置文件: $CONFIG_FILE"
+    echo ""
+}
+
+# 停止服务
+stop_service() {
+    log_info "停止 $SERVICE_DISPLAY_NAME..."
+    
+    if [ ! -f "$PID_FILE" ]; then
+        log_warning "$SERVICE_DISPLAY_NAME 未运行"
+        return 1
+    fi
+    
+    local pid=$(cat "$PID_FILE")
+    
+    if ! ps -p "$pid" > /dev/null 2>&1; then
+        log_warning "服务进程不存在 (PID: $pid)"
+        rm -f "$PID_FILE"
+        return 1
+    fi
+    
+    log_info "发送停止信号 (PID: $pid)..."
+    kill -TERM "$pid" 2>/dev/null || true
+    
+    local wait_count=0
+    local max_wait=15
+    while [ $wait_count -lt $max_wait ] && ps -p "$pid" > /dev/null 2>&1; do
+        sleep 1
+        ((wait_count++))
+    done
+    
+    if ps -p "$pid" > /dev/null 2>&1; then
+        log_warning "进程未响应，强制终止..."
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 2
+    fi
+    
+    rm -f "$PID_FILE"
+    
+    if ps -p "$pid" > /dev/null 2>&1; then
+        log_error "无法停止服务 (PID: $pid)"
+        return 1
+    else
+        log_success "$SERVICE_DISPLAY_NAME 已停止"
+        return 0
+    fi
+}
+
+# 重启服务
+restart_service() {
+    log_info "重启 $SERVICE_DISPLAY_NAME..."
+    
+    load_service_config
+    
+    if stop_service; then
+        sleep 3
+    fi
+    
+    start_service $CONFIG_PORT $CONFIG_HOST $CONFIG_DEBUG
+}
+
+# 服务状态检查
+status_service() {
+    if [ ! -f "$PID_FILE" ]; then
+        log_error "$SERVICE_DISPLAY_NAME 未运行"
+        return 1
+    fi
+    
+    local pid=$(cat "$PID_FILE")
+    
+    if ! ps -p "$pid" > /dev/null 2>&1; then
+        log_error "PID文件存在但进程不存在 (PID: $pid)"
+        rm -f "$PID_FILE"
+        return 1
+    fi
+    
+    load_service_config
+    
+    if health_check $CONFIG_PORT $CONFIG_HOST; then
+        log_success "$SERVICE_DISPLAY_NAME 正在运行且响应正常"
+        show_service_info $CONFIG_PORT $CONFIG_HOST
+        return 0
+    else
+        log_error "$SERVICE_DISPLAY_NAME 进程存在但服务无响应"
+        log_info "PID: $pid"
+        if [ -f "$ERROR_LOG_FILE" ]; then
+            log_warning "最近的错误信息:"
+            tail -5 "$ERROR_LOG_FILE"
+        fi
+        return 1
+    fi
+}
+
+# 监控服务
+monitor_service() {
+    log_info "监控 $SERVICE_DISPLAY_NAME (按 Ctrl+C 停止)..."
+    
+    load_service_config
+    
+    while true; do
+        echo "==================== $(date) ===================="
+        if status_service > /dev/null 2>&1; then
+            echo "✅ 服务状态: 正常运行"
+            echo "🌐 端口: $CONFIG_PORT"
+        else
+            echo "❌ 服务状态: 异常"
+            local restart_count=0
+            while [ $restart_count -lt $MAX_RESTART_ATTEMPTS ]; do
+                log_warning "尝试重启服务... ($((restart_count+1))/$MAX_RESTART_ATTEMPTS)"
+                if start_service $CONFIG_PORT $CONFIG_HOST $CONFIG_DEBUG; then
+                    log_success "服务重启成功"
+                    break
+                fi
+                ((restart_count++))
+                sleep 5
+            done
+            
+            if [ $restart_count -ge $MAX_RESTART_ATTEMPTS ]; then
+                log_error "达到最大重启次数，监控停止"
+                return 1
+            fi
+        fi
+        sleep 30
+    done
+}
+
+# 查看日志
+view_logs() {
+    local log_type=${1:-"both"}
+    
+    case $log_type in
+        "access"|"stdout")
+            if [ ! -f "$LOG_FILE" ]; then
+                log_error "访问日志文件不存在: $LOG_FILE"
+                return 1
+            fi
+            log_info "查看访问日志 (Ctrl+C 退出):"
+            tail -f "$LOG_FILE"
+            ;;
+        "error"|"stderr")
+            if [ ! -f "$ERROR_LOG_FILE" ]; then
+                log_error "错误日志文件不存在: $ERROR_LOG_FILE"
+                return 1
+            fi
+            log_info "查看错误日志 (Ctrl+C 退出):"
+            tail -f "$ERROR_LOG_FILE"
+            ;;
+        "both"|*)
+            log_info "同时查看访问日志和错误日志 (Ctrl+C 退出):"
+            if [ -f "$LOG_FILE" ] && [ -f "$ERROR_LOG_FILE" ]; then
+                tail -f "$LOG_FILE" "$ERROR_LOG_FILE"
+            elif [ -f "$LOG_FILE" ]; then
+                tail -f "$LOG_FILE"
+            elif [ -f "$ERROR_LOG_FILE" ]; then
+                tail -f "$ERROR_LOG_FILE"
+            else
+                log_error "日志文件不存在"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# 查看最后N行日志
+tail_logs() {
+    local lines=${1:-20}
+    local log_type=${2:-"both"}
+    
+    case $log_type in
+        "access"|"stdout")
+            if [ -f "$LOG_FILE" ]; then
+                log_info "最近 $lines 行访问日志:"
+                tail -n "$lines" "$LOG_FILE"
+            else
+                log_error "访问日志文件不存在: $LOG_FILE"
+            fi
+            ;;
+        "error"|"stderr")
+            if [ -f "$ERROR_LOG_FILE" ]; then
+                log_info "最近 $lines 行错误日志:"
+                tail -n "$lines" "$ERROR_LOG_FILE"
+            else
+                log_error "错误日志文件不存在: $ERROR_LOG_FILE"
+            fi
+            ;;
+        "both"|*)
+            log_info "最近 $lines 行日志:"
+            echo "--- 访问日志 ---"
+            if [ -f "$LOG_FILE" ]; then
+                tail -n "$lines" "$LOG_FILE"
+            else
+                echo "访问日志文件不存在"
+            fi
+            echo ""
+            echo "--- 错误日志 ---"
+            if [ -f "$ERROR_LOG_FILE" ]; then
+                tail -n "$lines" "$ERROR_LOG_FILE"
+            else
+                echo "错误日志文件不存在"
+            fi
+            ;;
+    esac
+}
+
+# 显示帮助信息
+show_help() {
+    echo "$SERVICE_DISPLAY_NAME 管理工具"
+    echo ""
+    echo "用法: $0 {start|stop|restart|status|monitor|logs|tail} [参数...]"
+    echo ""
+    echo "命令说明:"
+    echo "  start [端口] [主机] [debug] - 启动服务"
+    echo "  stop                      - 停止服务"
+    echo "  restart                   - 重启服务"
+    echo "  status                    - 查看服务状态"
+    echo "  monitor                   - 监控服务状态"
+    echo "  logs [类型]               - 查看实时日志 (access|error|both)"
+    echo "  tail [行数] [类型]        - 查看最后N行日志"
+    echo ""
+    echo "参数说明:"
+    echo "  端口   - 服务端口 (默认: $DEFAULT_PORT)"
+    echo "  主机   - 监听地址 (默认: $DEFAULT_HOST)"
+    echo "  debug  - 调试模式 (true|false, 默认: $DEFAULT_DEBUG)"
+    echo "  类型   - 日志类型 (access|error|both, 默认: both)"
+    echo "  行数   - 显示日志行数 (默认: 20)"
+    echo ""
+    echo "环境变量:"
+    echo "  PORT=8081 $0 start        # 使用8081端口启动"
+    echo "  HOST=0.0.0.0 $0 start     # 指定监听地址"
+    echo "  DEBUG=true $0 start       # 启用调试模式"
+    echo ""
+    echo "示例:"
+    echo "  $0 start                  # 使用默认配置启动"
+    echo "  $0 start 9090            # 使用9090端口启动"
+    echo "  $0 start 8080 0.0.0.0 true  # 指定完整参数"
+    echo "  PORT=8081 $0 start       # 通过环境变量指定"
+    echo "  $0 status                # 查看服务状态"
+    echo "  $0 logs                  # 查看实时日志"
+    echo "  $0 logs error            # 只看错误日志"
+    echo "  $0 tail 50               # 查看最后50行日志"
+    echo "  $0 monitor               # 启动服务监控"
+}
+
+# 主程序入口
+main() {
+    case "$1" in
+        start)
+            local port=${2:-${PORT:-$DEFAULT_PORT}}
+            local host=${3:-${HOST:-$DEFAULT_HOST}}
+            local debug=${4:-${DEBUG:-$DEFAULT_DEBUG}}
+            start_service $port $host $debug
+            ;;
+        stop)
+            stop_service
+            ;;
+        restart)
+            restart_service
+            ;;
+        status)
+            status_service
+            ;;
+        monitor)
+            monitor_service
+            ;;
+        logs)
+            local log_type=${2:-"both"}
+            view_logs $log_type
+            ;;
+        tail)
+            local lines=${2:-20}
+            local log_type=${3:-"both"}
+            tail_logs $lines $log_type
+            ;;
+        *)
+            show_help
+            exit 1
+            ;;
+    esac
+}
+
+# 脚本入口点
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
 fi
