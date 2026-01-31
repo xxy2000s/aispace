@@ -251,7 +251,10 @@ def handle_file_upload(files, upload_id):
         
         for i, file in enumerate(files):
             if file and file.filename:
-                filename = secure_filename(file.filename)
+                # 修复中文字符和后缀支持问题
+                original_filename = file.filename
+                # 保留原始文件名，只进行安全检查
+                filename = sanitize_filename(original_filename)
                 filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
                 
                 # 如果文件已存在，添加时间戳
@@ -285,6 +288,37 @@ def handle_file_upload(files, upload_id):
         upload_progress[upload_id]['status'] = f'错误: {str(e)}'
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+def sanitize_filename(filename):
+    """安全处理文件名，支持中文字符并保留后缀"""
+    import re
+    import unicodedata
+    
+    # 标准化Unicode字符
+    filename = unicodedata.normalize('NFKD', filename)
+    
+    # 提取文件扩展名
+    name, ext = os.path.splitext(filename)
+    
+    # 清理文件名，保留字母、数字、中文、点、连字符、下划线和空格
+    name = re.sub(r'[^\w\s\u4e00-\u9fff.-]', '_', name)
+    
+    # 清理扩展名，只保留字母、数字和点
+    ext = re.sub(r'[^\w.]', '', ext)
+    
+    # 确保文件名不过长
+    if len(name) > 100:
+        name = name[:100]
+    
+    # 组合文件名和扩展名
+    clean_filename = name + ext
+    
+    # 确保至少有一个字符且不以点开头
+    if not clean_filename or clean_filename.startswith('.'):
+        clean_filename = 'unnamed_file' + ext
+    
+    return clean_filename
+
 def handle_folder_upload(files, folder_data, upload_id):
     """处理文件夹上传 - 彻底修复路径嵌套问题"""
     try:
@@ -294,12 +328,12 @@ def handle_folder_upload(files, folder_data, upload_id):
         
         # 确定根文件夹名称（从上传数据或第一个文件推断）
         if folder_data and 'name' in folder_data and folder_data['name']:
-            root_folder_name = folder_data['name']
+            root_folder_name = sanitize_filename(folder_data['name'])
         else:
             # 从第一个文件路径推断根文件夹名
             sample_path = files[0].filename
             if '/' in sample_path:
-                root_folder_name = sample_path.split('/')[0]
+                root_folder_name = sanitize_filename(sample_path.split('/')[0])
             else:
                 root_folder_name = f'folder_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
         
@@ -313,35 +347,30 @@ def handle_folder_upload(files, folder_data, upload_id):
         for file in files:
             if file and file.filename:
                 original_path = file.filename  # 例如: "exp/a.pdf" 或 "exp/sub/b.pdf"
-                print(f"DEBUG: Processing file: {original_path}")
                 
                 if '/' in original_path:
                     # 分离根文件夹和相对路径
                     parts = original_path.split('/')
-                    file_relative_path = '/'.join(parts[1:])  # "a.pdf" 或 "sub/b.pdf"
+                    # 保留目录结构，但清理每个部分的文件名
+                    sanitized_parts = [sanitize_filename(part) for part in parts]
+                    file_relative_path = '/'.join(sanitized_parts[1:])  # "a.pdf" 或 "sub/b.pdf"
                 else:
                     # 根目录下的文件
-                    file_relative_path = original_path
-                
-                print(f"DEBUG: Relative path: {file_relative_path}")
+                    file_relative_path = sanitize_filename(original_path)
                 
                 # 构建完整的目标路径
                 if file_relative_path:
                     final_target_path = os.path.join(target_root, file_relative_path)
                 else:
-                    final_target_path = os.path.join(target_root, original_path)
-                
-                print(f"DEBUG: Target path: {final_target_path}")
+                    final_target_path = os.path.join(target_root, sanitize_filename(original_path))
                 
                 # 创建必要的子目录
                 target_dir = os.path.dirname(final_target_path)
                 if target_dir and not os.path.exists(target_dir):
                     os.makedirs(target_dir, exist_ok=True)
-                    print(f"DEBUG: Created directory: {target_dir}")
                 
                 # 保存文件
                 file.save(final_target_path)
-                print(f"DEBUG: Saved file to: {final_target_path}")
         
         # 确定最终存储位置
         final_destination = os.path.join(app.config['UPLOAD_FOLDER'], root_folder_name)
