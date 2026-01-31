@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>内网文件传输服务</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <div class="title-section">
+                    <h1>📁 内网文件传输服务</h1>
+                    <p>在同一网络下快速传输文件</p>
+                </div>
+                <div class="qr-section">
+                    <div class="qr-card">
+                        <h3>📱 手机扫码访问</h3>
+                        <div class="qr-container">
+                            <div id="defaultQRCode"></div>
+                        </div>
+                        <div class="qr-info">
+                            <p id="defaultQRUrl"></p>
+                            <p class="hint">提示：手机与电脑需在同一网络下</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- 上传区域 -->
+            <div class="upload-section">
+                <h2>📤 文件上传</h2>
+                
+                <!-- 分离的上传按钮 -->
+                <div class="upload-buttons">
+                    <button class="upload-btn" id="fileUploadBtn">
+                        📄 上传文件
+                    </button>
+                    <button class="upload-btn folder-btn" id="folderUploadBtn">
+                        📁 上传文件夹
+                    </button>
+                </div>
+                
+                <!-- 拖拽上传区域 -->
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-placeholder">
+                        <p>或拖拽文件/文件夹到这里</p>
+                        <p class="small">自动识别文件和文件夹</p>
+                    </div>
+                </div>
+                
+                <!-- 隐藏的文件输入 -->
+                <input type="file" id="fileInput" multiple style="display: none;">
+                <input type="file" id="folderInput" multiple webkitdirectory directory style="display: none;">
+                
+                <!-- 上传进度 -->
+                <div class="progress-container" id="progressContainer" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">准备上传...</div>
+                </div>
+            </div>
+
+            <!-- 文件列表区域 -->
+            <div class="files-section">
+                <div class="files-header">
+                    <h2>📥 可下载文件</h2>
+                    <div class="files-controls">
+                        <div class="search-box">
+                            <input type="text" id="searchInput" placeholder="搜索文件..." />
+                            <button id="searchBtn">🔍</button>
+                            <button id="clearSearchBtn" style="display: none;">×</button>
+                        </div>
+                        <div class="sort-controls">
+                            <select id="sortBy">
+                                <option value="name">按名称排序</option>
+                                <option value="size">按大小排序</option>
+                                <option value="type">按类型排序</option>
+                            </select>
+                            <select id="sortOrder">
+                                <option value="asc">升序</option>
+                                <option value="desc">降序</option>
+                            </select>
+                        </div>
+                        <button class="refresh-btn" id="refreshBtn">🔄 刷新</button>
+                    </div>
+                </div>
+                <div class="file-tree-container">
+                    <div class="file-tree" id="fileTree">
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主界面二维码模态框 -->
+        <div class="modal" id="mainQRModal">
+            <div class="modal-content">
+                <span class="close" onclick="closeMainQRModal()">&times;</span>
+                <h3>用微信扫二维码访问</h3>
+                <div id="mainQRCode"></div>
+                <p id="mainQRUrl"></p>
+                <p class="hint">提示：手机扫描后可访问完整的文件传输界面</p>
+            </div>
+        </div>
+
+        <!-- 文件下载二维码模态框 -->
+        <div class="modal" id="qrModal">
+            <div class="modal-content">
+                <span class="close" onclick="closeQRModal()">&times;</span>
+                <h3>扫一扫一键下载</h3>
+                <div id="qrCode"></div>
+                <p id="downloadLink"></p>
+                <p class="hint">提示：扫码后可在手机浏览器中下载文件</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 全局函数供HTML调用
+        function loadFiles() {
+            app.loadFiles();
+        }
+        
+        function generateQR() {
+            app.generateQR();
+        }
+        
+        function closeMainQRModal() {
+            document.getElementById('mainQRModal').style.display = 'none';
+        }
+        
+        function closeQRModal() {
+            document.getElementById('qrModal').style.display = 'none';
+        }
+        
+        // 点击模态框外部关闭
+        window.onclick = function(event) {
+            const modals = ['mainQRModal', 'qrModal'];
+            modals.forEach(modalId => {
+                const modal = document.getElementById(modalId);
+                if (event.target == modal) {
+                    modal.style.display = 'none';
+                }
+            });
+        }
+    </script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
