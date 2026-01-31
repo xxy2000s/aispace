@@ -6,6 +6,7 @@ class FileTransferApp {
         this.sortBy = 'name';
         this.sortOrder = 'asc';
         this.isMobile = this.detectMobile();
+        this.apiKey = null;
         this.init();
         // 页面加载完成后自动生成二维码
         this.generateDefaultQR();
@@ -21,6 +22,28 @@ class FileTransferApp {
     detectMobile() {
         return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
                window.innerWidth <= 768; // 或者根据屏幕宽度判断
+    }
+    
+    getStoredApiKey() {
+        // 从localStorage获取API密钥，如果不存在则从URL参数获取
+        if (!this.apiKey) {
+            this.apiKey = localStorage.getItem('api_key');
+            if (!this.apiKey) {
+                // 从URL参数中获取API密钥
+                const urlParams = new URLSearchParams(window.location.search);
+                this.apiKey = urlParams.get('api_key');
+                if (this.apiKey) {
+                    // 保存到localStorage以便后续使用
+                    localStorage.setItem('api_key', this.apiKey);
+                }
+            }
+        }
+        return this.apiKey;
+    }
+    
+    setApiKey(apiKey) {
+        this.apiKey = apiKey;
+        localStorage.setItem('api_key', apiKey);
     }
 
     init() {
@@ -566,6 +589,14 @@ class FileTransferApp {
             
             if (result.success) {
                 this.showMainQRModal(result.qr_content, result.url);
+                // 如果API返回了API密钥，保存它
+                if (result.api_key_required && result.url.includes('?api_key=')) {
+                    const url = new URL(result.url);
+                    const apiKey = url.searchParams.get('api_key');
+                    if (apiKey) {
+                        this.setApiKey(apiKey);
+                    }
+                }
             } else {
                 alert('生成二维码失败: ' + result.error);
             }
@@ -610,6 +641,14 @@ class FileTransferApp {
             
             if (result.success) {
                 this.showMainQRModal(result.qr_content, result.url);
+                // 如果API返回了API密钥，保存它
+                if (result.api_key_required && result.url.includes('?api_key=')) {
+                    const url = new URL(result.url);
+                    const apiKey = url.searchParams.get('api_key');
+                    if (apiKey) {
+                        this.setApiKey(apiKey);
+                    }
+                }
             } else {
                 alert('生成二维码失败: ' + result.error);
             }

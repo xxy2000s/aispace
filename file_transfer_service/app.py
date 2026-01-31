@@ -10,6 +10,9 @@ import threading
 import time
 import argparse
 import socket
+import hashlib
+import secrets
+
 
 def find_free_port(start_port=8080, max_attempts=100):
     """寻找可用端口"""
@@ -24,6 +27,7 @@ def find_free_port(start_port=8080, max_attempts=100):
         except OSError:
             continue
     return None
+
 
 def get_config():
     """获取配置信息"""
@@ -52,6 +56,7 @@ def get_config():
         
     return config
 
+
 # 获取配置
 config = get_config()
 
@@ -73,6 +78,66 @@ os.makedirs('temp', exist_ok=True)
 
 # 存储上传进度
 upload_progress = {}
+
+
+# API密钥管理
+def generate_api_key():
+    """生成随机API密钥"""
+    return secrets.token_urlsafe(32)
+
+
+def get_api_key():
+    """获取API密钥，优先从环境变量获取，否则生成一个新的"""
+    api_key = os.getenv('FILE_TRANSFER_API_KEY')
+    if not api_key:
+        # 尝试从配置文件获取
+        config_file = os.path.join(os.path.dirname(__file__), 'config.json')
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    api_key = config.get('api_key')
+            except:
+                pass
+        
+        if not api_key:
+            api_key = generate_api_key()
+            # 保存到配置文件
+            try:
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    json.dump({'api_key': api_key}, f, ensure_ascii=False, indent=2)
+                print(f"📝 API密钥已生成并保存到配置文件: {config_file}")
+                print(f"🔑 API密钥: {api_key[:8]}... (仅显示前8位)")
+            except Exception as e:
+                print(f"⚠️  无法保存API密钥到配置文件: {e}")
+    
+    return api_key
+
+
+def require_api_key(f):
+    """装饰器：要求API密钥验证"""
+    from functools import wraps
+    
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # 从请求头或查询参数获取API密钥
+        api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
+        
+        if not api_key or api_key != API_KEY:
+            return jsonify({
+                'success': False, 
+                'error': '无效的API密钥',
+                'message': '请在请求头中添加 X-API-Key 或在URL中添加 ?api_key 参数'
+            }), 401
+        
+        return f(*args, **kwargs)
+    
+    return decorated_function
+
+
+# 全局API密钥
+API_KEY = get_api_key()
+
 
 class FileManager:
     @staticmethod
@@ -184,14 +249,85 @@ class FileManager:
         
         return flat_list
 
+
+# 会话存储（实际部署建议使用Redis等）
+valid_sessions = set()
+
+def generate_session_token():
+    """生成会话令牌"""
+    return secrets.token_urlsafe(32)
+
+def validate_session(session_token):
+    """验证会话令牌"""
+    return session_token in valid_sessions
+
 @app.route('/')
-def index():
-    """主页面"""
+def login_page():
+    """登录页面"""
+    return render_template('login.html')
+
+@app.route('/dashboard')
+def dashboard():
+    """主仪表板页面"""
+    # 检查会话
+    session_token = request.cookies.get('session_token')
+    if not session_token or not validate_session(session_token):
+        return redirect(url_for('login_page'))
+    
     return render_template('index.html')
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    """API登录接口"""
+    try:
+        data = request.get_json()
+        api_key = data.get('api_key')
+        
+        if not api_key or api_key != API_KEY:
+            return jsonify({
+                'success': False,
+                'error': '无效的API密钥'
+            }), 401
+        
+        # 生成会话令牌
+        session_token = generate_session_token()
+        valid_sessions.add(session_token)
+        
+        # 设置会话cookie
+        response = jsonify({'success': True})
+        response.set_cookie('session_token', session_token, httponly=True, secure=False)
+        return response
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/logout', methods=['POST'])
+def api_logout():
+    """API登出接口"""
+    try:
+        session_token = request.cookies.get('session_token')
+        if session_token:
+            valid_sessions.discard(session_token)
+        
+        response = jsonify({'success': True})
+        response.set_cookie('session_token', '', expires=0)
+        return response
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/files')
 def get_files():
     """获取文件列表API，支持搜索和排序"""
+    # 检查会话
+    session_token = request.cookies.get('session_token')
+    if not session_token or not validate_session(session_token):
+        return jsonify({
+            'success': False, 
+            'error': '未授权访问',
+            'message': '请先登录获取访问权限'
+        }), 401
+    
     try:
         # 获取查询参数
         search_query = request.args.get('search', '').strip()
@@ -212,9 +348,19 @@ def get_files():
             'error': str(e)
         }), 500
 
+
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
     """文件上传API"""
+    # 检查会话
+    session_token = request.cookies.get('session_token')
+    if not session_token or not validate_session(session_token):
+        return jsonify({
+            'success': False, 
+            'error': '未授权访问',
+            'message': '请先登录获取访问权限'
+        }), 401
+    
     try:
         upload_id = str(uuid.uuid4())
         upload_progress[upload_id] = {
@@ -242,6 +388,7 @@ def upload_file():
             
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 def handle_file_upload(files, upload_id):
     """处理普通文件上传"""
@@ -288,36 +435,6 @@ def handle_file_upload(files, upload_id):
         upload_progress[upload_id]['status'] = f'错误: {str(e)}'
         return jsonify({'success': False, 'error': str(e)}), 500
 
-
-def sanitize_filename(filename):
-    """安全处理文件名，支持中文字符并保留后缀"""
-    import re
-    import unicodedata
-    
-    # 标准化Unicode字符
-    filename = unicodedata.normalize('NFKD', filename)
-    
-    # 提取文件扩展名
-    name, ext = os.path.splitext(filename)
-    
-    # 清理文件名，保留字母、数字、中文、点、连字符、下划线和空格
-    name = re.sub(r'[^\w\s\u4e00-\u9fff.-]', '_', name)
-    
-    # 清理扩展名，只保留字母、数字和点
-    ext = re.sub(r'[^\w.]', '', ext)
-    
-    # 确保文件名不过长
-    if len(name) > 100:
-        name = name[:100]
-    
-    # 组合文件名和扩展名
-    clean_filename = name + ext
-    
-    # 确保至少有一个字符且不以点开头
-    if not clean_filename or clean_filename.startswith('.'):
-        clean_filename = 'unnamed_file' + ext
-    
-    return clean_filename
 
 def handle_folder_upload(files, folder_data, upload_id):
     """处理文件夹上传 - 彻底修复路径嵌套问题"""
@@ -411,16 +528,65 @@ def handle_folder_upload(files, folder_data, upload_id):
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+def sanitize_filename(filename):
+    """安全处理文件名，支持中文字符并保留后缀"""
+    import re
+    import unicodedata
+    
+    # 标准化Unicode字符
+    filename = unicodedata.normalize('NFKD', filename)
+    
+    # 提取文件扩展名
+    name, ext = os.path.splitext(filename)
+    
+    # 清理文件名，保留字母、数字、中文、点、连字符、下划线和空格
+    name = re.sub(r'[^\w\s\u4e00-\u9fff.-]', '_', name)
+    
+    # 清理扩展名，只保留字母、数字和点
+    ext = re.sub(r'[^\w.]', '', ext)
+    
+    # 确保文件名不过长
+    if len(name) > 100:
+        name = name[:100]
+    
+    # 组合文件名和扩展名
+    clean_filename = name + ext
+    
+    # 确保至少有一个字符且不以点开头
+    if not clean_filename or clean_filename.startswith('.'):
+        clean_filename = 'unnamed_file' + ext
+    
+    return clean_filename
+
+
 @app.route('/api/progress/<upload_id>')
 def get_upload_progress(upload_id):
-    """获取上传进度"""
+    """获取上传进度 - 需要会话验证"""
+    # 检查会话
+    session_token = request.cookies.get('session_token')
+    if not session_token or not validate_session(session_token):
+        return jsonify({
+            'error': '未授权访问',
+            'message': '请先登录获取访问权限'
+        }), 401
+    
     if upload_id in upload_progress:
         return jsonify(upload_progress[upload_id])
     return jsonify({'error': '上传ID不存在'}), 404
 
+
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    """文件下载"""
+    """文件下载 - 需要会话验证"""
+    # 检查会话
+    session_token = request.cookies.get('session_token')
+    if not session_token or not validate_session(session_token):
+        return jsonify({
+            'error': '未授权访问',
+            'message': '请先登录获取访问权限'
+        }), 401
+    
     try:
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         
@@ -431,6 +597,7 @@ def download_file(filename):
             return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
     except Exception as e:
         return jsonify({'error': str(e)}), 404
+
 
 def download_folder_as_zip(folder_name):
     """将文件夹打包成zip文件下载"""
@@ -448,9 +615,9 @@ def download_folder_as_zip(folder_name):
         
         # 创建zip文件
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(folder_path):
-                for file in files:
-                    file_path = os.path.join(root, file)
+            for root, dirs, filenames in os.walk(folder_path):
+                for filename in filenames:
+                    file_path = os.path.join(root, filename)
                     # 计算相对路径
                     arcname = os.path.relpath(file_path, app.config['UPLOAD_FOLDER'])
                     zipf.write(file_path, arcname)
@@ -460,6 +627,7 @@ def download_folder_as_zip(folder_name):
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/auto-redirect')
 def auto_redirect():
@@ -531,6 +699,7 @@ def auto_redirect():
     </html>
     """
 
+
 @app.route('/download-page')
 def download_page():
     """文件下载页面"""
@@ -581,6 +750,7 @@ def download_page():
     except Exception as e:
         return f"错误: {str(e)}", 500
 
+
 @app.route('/api/generate_qr')
 def generate_qr():
     """生成主访问二维码（使用实际IP地址和端口）"""
@@ -603,22 +773,47 @@ def generate_qr():
         # 获取当前实际运行的端口
         server_port = request.environ.get('SERVER_PORT', app.config['SERVER_PORT'])
         
-        base_url = f"http://{local_ip}:{server_port}"
-        main_url = f"{base_url}/"
+        base_url = f"http://{local_ip}:{server_port}/"
+        main_url = f"{base_url}"
         return jsonify({
             'success': True,
             'qr_content': main_url,
             'url': main_url,
             'ip': local_ip,
-            'port': server_port
+            'port': server_port,
+            'login_required': True
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     print(f"🚀 启动文件传输服务...")
     print(f"🌐 访问地址: http://{app.config['SERVER_HOST']}:{app.config['SERVER_PORT']}")
     print(f"📁 上传目录: {os.path.abspath(app.config['UPLOAD_FOLDER'])}")
+    print(f"🔒 API密钥: {API_KEY[:8]}... (仅显示前8位)")
     print(f"⚠️  请注意：此服务仅适用于局域网内可信环境")
     
-    app.run(host=app.config['SERVER_HOST'], port=app.config['SERVER_PORT'], debug=True)
+    # 生产环境配置
+if __name__ == '__main__':
+    import os
+    debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    
+    print(f"🚀 启动文件传输服务...")
+    print(f"🌐 访问地址: http://{app.config['SERVER_HOST']}:{app.config['SERVER_PORT']}")
+    print(f"📁 上传目录: {os.path.abspath(app.config['UPLOAD_FOLDER'])}")
+    print(f"🔒 API密钥: {API_KEY[:8]}... (仅显示前8位)")
+    
+    if debug_mode:
+        print("⚠️  警告：当前运行在调试模式，仅适用于开发环境")
+        print("⚠️  生产环境请设置 FLASK_DEBUG=false")
+    else:
+        print("✅ 生产模式：已启用安全配置")
+        print("⚠️  请注意：外部访问需要配置适当的安全措施")
+    
+    app.run(
+        host=app.config['SERVER_HOST'], 
+        port=app.config['SERVER_PORT'], 
+        debug=debug_mode,
+        threaded=True  # 支持多线程处理并发请求
+    )
