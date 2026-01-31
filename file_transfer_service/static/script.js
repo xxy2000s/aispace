@@ -5,9 +5,22 @@ class FileTransferApp {
         this.searchQuery = '';
         this.sortBy = 'name';
         this.sortOrder = 'asc';
+        this.isMobile = this.detectMobile();
         this.init();
         // 页面加载完成后自动生成二维码
         this.generateDefaultQR();
+        
+        // 根据设备类型添加相应类名
+        if (this.isMobile) {
+            document.body.classList.add('mobile-device');
+        } else {
+            document.body.classList.add('desktop-device');
+        }
+    }
+    
+    detectMobile() {
+        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+               window.innerWidth <= 768; // 或者根据屏幕宽度判断
     }
 
     init() {
@@ -112,7 +125,7 @@ class FileTransferApp {
             this.handleFileSelect(e.target.files, true);
         });
 
-        // 拖拽上传
+        // 拖拽上传（桌面端）
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             uploadArea.addEventListener(eventName, this.preventDefaults, false);
         });
@@ -134,6 +147,11 @@ class FileTransferApp {
             );
             this.handleFileSelect(files, isFolder);
         }, false);
+        
+        // 触摸事件支持（移动端）
+        uploadArea.addEventListener('touchstart', this.highlight, false);
+        uploadArea.addEventListener('touchend', this.unhighlight, false);
+        uploadArea.addEventListener('touchcancel', this.unhighlight, false);
     }
 
     preventDefaults(e) {
@@ -152,6 +170,9 @@ class FileTransferApp {
     async handleFileSelect(files, isFolder = false) {
         if (files.length === 0) return;
 
+        // 显示已选择文件预览
+        this.showSelectedFilesPreview(files);
+        
         const formData = new FormData();
         
         // 添加文件到FormData
@@ -180,6 +201,7 @@ class FileTransferApp {
                 this.updateProgress(100, '上传完成！');
                 setTimeout(() => {
                     this.hideProgress();
+                    this.hideSelectedFilesPreview(); // 隐藏预览
                     this.loadFiles();
                 }, 1000);
             } else {
@@ -187,6 +209,98 @@ class FileTransferApp {
             }
         } catch (error) {
             this.updateProgress(0, `上传出错: ${error.message}`);
+        }
+    }
+    
+    showSelectedFilesPreview(files) {
+        const previewContainer = document.getElementById('filesPreview');
+        const listContainer = document.getElementById('selectedFilesList');
+        
+        if (!previewContainer || !listContainer) return;
+        
+        let html = '';
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const fileType = this.getFileTypeFromName(file.name);
+            const icon = this.getFileIcon(fileType);
+            const size = this.formatSize(file.size);
+            
+            html += `
+                <div class="selected-file-item">
+                    <div class="file-info">
+                        <span class="file-icon">${icon}</span>
+                        <div class="file-details">
+                            <span class="file-name">${this.truncateFileName(file.name)}</span>
+                            <span class="file-size">${size}</span>
+                        </div>
+                    </div>
+                    <div class="file-actions">
+                        <button class="remove-file-btn" onclick="app.removeSelectedFile(${i})">×</button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        previewContainer.innerHTML = html;
+        listContainer.style.display = 'block';
+    }
+    
+    hideSelectedFilesPreview() {
+        const listContainer = document.getElementById('selectedFilesList');
+        if (listContainer) {
+            listContainer.style.display = 'none';
+        }
+    }
+    
+    truncateFileName(name) {
+        if (name.length > 30) {
+            return name.substring(0, 27) + '...';
+        }
+        return name;
+    }
+    
+    getFileTypeFromName(filename) {
+        const extension = filename.toLowerCase().split('.').pop();
+        const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'];
+        const videoExts = ['mp4', 'avi', 'mov', 'wmv', 'flv', 'mkv'];
+        const audioExts = ['mp3', 'wav', 'flac', 'aac', 'ogg'];
+        const archiveExts = ['zip', 'rar', '7z', 'tar', 'gz'];
+        const documentExts = ['doc', 'docx', 'txt', 'rtf'];
+        const pdfExts = ['pdf'];
+        
+        if (imageExts.includes(extension)) return 'image';
+        if (videoExts.includes(extension)) return 'video';
+        if (audioExts.includes(extension)) return 'audio';
+        if (archiveExts.includes(extension)) return 'archive';
+        if (documentExts.includes(extension)) return 'document';
+        if (pdfExts.includes(extension)) return 'pdf';
+        return 'file';
+    }
+    
+    getFileIcon(fileType) {
+        switch(fileType) {
+            case 'image': return '🖼️';
+            case 'video': return '🎬';
+            case 'audio': return '🎵';
+            case 'archive': return '📦';
+            case 'document': return '📝';
+            case 'pdf': return '📕';
+            default: return '📄';
+        }
+    }
+    
+    removeSelectedFile(index) {
+        // 由于无法直接从FileList中移除文件，
+        // 我们暂时只是隐藏该文件的预览
+        const fileElements = document.querySelectorAll('.selected-file-item');
+        if (fileElements[index]) {
+            fileElements[index].style.display = 'none';
+            
+            // 检查是否还有可见的文件
+            const visibleFiles = Array.from(fileElements).filter(el => el.style.display !== 'none');
+            if (visibleFiles.length === 0) {
+                this.hideSelectedFilesPreview();
+            }
         }
     }
 
