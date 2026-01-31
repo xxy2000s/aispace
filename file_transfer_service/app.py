@@ -15,13 +15,13 @@ def find_free_port(start_port=8080, max_attempts=100):
     """寻找可用端口"""
     for port in range(start_port, start_port + max_attempts):
         try:
+            # 检查0.0.0.0上的端口是否可用
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
-            result = sock.connect_ex(('localhost', port))
+            result = sock.bind(('0.0.0.0', port))
             sock.close()
-            if result != 0:  # 端口可用
-                return port
-        except:
+            return port
+        except OSError:
             continue
     return None
 
@@ -83,32 +83,58 @@ class FileManager:
             try:
                 items = os.listdir(path)
                 
-                # 应用搜索过滤（忽略大小写）
-                if search_query:
-                    search_lower = search_query.lower()
-                    items = [item for item in items if search_lower in item.lower()]
-                
                 for item in items:
                     item_path = os.path.join(path, item)
                     relative_path = os.path.relpath(item_path, root_path)
                     
                     if os.path.isdir(item_path):
                         children = build_tree(item_path, root_path)
-                        tree.append({
-                            'name': item,
-                            'path': relative_path,
-                            'type': 'folder',
-                            'children': children,
-                            'size': FileManager.get_folder_size(item_path),
-                            'collapsed': False  # 默认展开
-                        })
+                        # 如果有搜索查询，只在有匹配项时添加文件夹
+                        if search_query:
+                            search_lower = search_query.lower()
+                            # 检查文件夹名是否匹配，或者子文件夹中有匹配项
+                            folder_matches = search_lower in item.lower()
+                            has_matching_children = any(
+                                child.get('name', '').lower().find(search_lower) != -1
+                                for child in children
+                            )
+                            if folder_matches or has_matching_children:
+                                tree.append({
+                                    'name': item,
+                                    'path': relative_path,
+                                    'type': 'folder',
+                                    'children': children,
+                                    'size': FileManager.get_folder_size(item_path),
+                                    'collapsed': False
+                                })
+                        else:
+                            tree.append({
+                                'name': item,
+                                'path': relative_path,
+                                'type': 'folder',
+                                'children': children,
+                                'size': FileManager.get_folder_size(item_path),
+                                'collapsed': False
+                            })
                     else:
-                        tree.append({
-                            'name': item,
-                            'path': relative_path,
-                            'type': 'file',
-                            'size': os.path.getsize(item_path)
-                        })
+                        # 文件处理
+                        if search_query:
+                            search_lower = search_query.lower()
+                            if search_lower in item.lower():
+                                tree.append({
+                                    'name': item,
+                                    'path': relative_path,
+                                    'type': 'file',
+                                    'size': os.path.getsize(item_path)
+                                })
+                        else:
+                            # 没有搜索时显示所有文件
+                            tree.append({
+                                'name': item,
+                                'path': relative_path,
+                                'type': 'file',
+                                'size': os.path.getsize(item_path)
+                            })
             except PermissionError:
                 pass
             
@@ -406,16 +432,6 @@ def download_folder_as_zip(folder_name):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
-
-
-
-
-
-
-
-
-
 @app.route('/auto-redirect')
 def auto_redirect():
     """自动跳转页面，用于二维码扫描后的自动跳转"""
@@ -538,7 +554,7 @@ def download_page():
 
 @app.route('/api/generate_qr')
 def generate_qr():
-    """生成主访问二维码（使用实际IP地址）"""
+    """生成主访问二维码（使用实际IP地址和端口）"""
     try:
         # 获取实际的网络IP地址而不是localhost
         import socket
@@ -555,26 +571,20 @@ def generate_qr():
         except:
             pass
             
-        base_url = f"http://{local_ip}:8080"
+        # 获取当前实际运行的端口
+        server_port = request.environ.get('SERVER_PORT', app.config['SERVER_PORT'])
+        
+        base_url = f"http://{local_ip}:{server_port}"
         main_url = f"{base_url}/"
         return jsonify({
             'success': True,
             'qr_content': main_url,
             'url': main_url,
-            'ip': local_ip
+            'ip': local_ip,
+            'port': server_port
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
-
-
-
-@app.route('/mobile-upload')
-def mobile_upload():
-    """移动端上传页面"""
-    return render_template('mobile_upload.html')
-
 
 if __name__ == '__main__':
     print(f"🚀 启动文件传输服务...")
